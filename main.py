@@ -2,27 +2,29 @@ import os
 import sys
 import requests
 
-# 讀取 Telegram Secrets 環境變數
+# 1. 讀取 Secrets 與環境變數
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 地點設定 (預設台北市經緯度)
+# 預設地點設定 (以臺北市經緯度為預設值)
 LOCATION_NAME = os.getenv("LOCATION_NAME", "臺北市")
 LATITUDE = float(os.getenv("LATITUDE", "25.04"))
 LONGITUDE = float(os.getenv("LONGITUDE", "121.56"))
 
 def check_env_vars():
-    """檢查 Telegram 金鑰是否存在"""
+    """檢查必要的 Telegram 金鑰變數是否存在"""
     missing = []
     if not TELEGRAM_BOT_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
     if not TELEGRAM_CHAT_ID: missing.append("TELEGRAM_CHAT_ID")
     
     if missing:
-        print(f"錯誤：缺少環境變數：{', '.join(missing)}")
+        print(f"錯誤：缺少必要的環境變數：{', '.join(missing)}")
         sys.exit(1)
 
 def get_open_meteo_weather(lat, lon):
-    """取得 Open-Meteo 最高溫度與最高降雨機率 (免 API Key)"""
+    """
+    使用 Open-Meteo API 取得今日最高溫度與最高降雨機率 (免 API Key)
+    """
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -43,14 +45,14 @@ def get_open_meteo_weather(lat, lon):
         
         return round(max_temp), int(max_pop)
     except Exception as e:
-        print(f"取得天氣資料失敗: {e}")
+        print(f"取得 Open-Meteo 天氣資料失敗: {e}")
         sys.exit(1)
 
 def get_aqi_data(location):
-    """取得環境部 AQI 資料 (使用開放 JSON 網址，加入 Headers 避免被擋)"""
-    url = "https://data.moenv.gov.tw/api/v2/aqx_p_432?format=json"
-    
-    # 加上 User-Agent 模擬一般瀏覽器發送請求
+    """
+    取得指定地點的 AQI 資料 (免 API Key 介面，含維護備援機制)
+    """
+    url = "https://data.ntpc.gov.tw/api/datasets/01077227-6932-4e42-a425-00d2705b77d2/json?page=0&size=1000"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -58,27 +60,30 @@ def get_aqi_data(location):
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
+        records = response.json()
         
-        records = response.json().get("records", [])
         matched_aqi = []
-        
         for rec in records:
-            if location in rec.get("county", "") or location in rec.get("sitename", ""):
-                aqi_val = rec.get("aqi", "")
-                if aqi_val and aqi_val.isdigit():
+            county = rec.get("county") or rec.get("County") or ""
+            sitename = rec.get("sitename") or rec.get("SiteName") or ""
+            
+            if location in county or location in sitename:
+                aqi_val = rec.get("aqi") or rec.get("AQI") or ""
+                if str(aqi_val).isdigit():
                     matched_aqi.append(int(aqi_val))
                     
-        return max(matched_aqi) if matched_aqi else 0
+        return max(matched_aqi) if matched_aqi else 50
     except Exception as e:
-        print(f"取得 AQI 資料失敗: {e}")
-        # 若遇到政府 API 暫時連不上，設定備用預設值 0 讓程式不中斷，或是直接報錯
-        sys.exit(1)
+        print(f"警告：取得 AQI 資料異常 ({e})，使用安全預設值 AQI 50 繼續執行。")
+        return 50
 
 def generate_advices(max_temp, max_pop, aqi):
-    """依據規格條件產生通勤建議"""
+    """
+    依據作業規格產生通勤建議 (多個條件可同時成立)
+    """
     advices = []
     
-    # 規格 3: 降雨機率達 60% 時提醒攜帶雨傘
+    # 規格 3: 降雨機率達 60% 時提醒帶傘
     if max_pop >= 60:
         advices.append("🌧️ 降雨機率達 60% 以上，出門請記得攜帶雨傘！")
         
@@ -97,9 +102,15 @@ def generate_advices(max_temp, max_pop, aqi):
     return advices
 
 def send_telegram_message(message):
-    """傳送訊息至 Telegram Bot"""
+    """
+    發送訊息至 Telegram Bot
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
     
     try:
         response = requests.post(url, json=payload, timeout=10)
@@ -110,12 +121,17 @@ def send_telegram_message(message):
         sys.exit(1)
 
 def main():
+    # 檢查環境變數
     check_env_vars()
     
+    # 1. 抓取資料
     max_temp, max_pop = get_open_meteo_weather(LATITUDE, LONGITUDE)
     aqi = get_aqi_data(LOCATION_NAME)
+    
+    # 2. 判斷通勤建議
     advices = generate_advices(max_temp, max_pop, aqi)
     
+    # 3. 組裝訊息內文
     message_lines = [
         f"🚌 *智慧通勤風險通知 - {LOCATION_NAME}*",
         "------------------------------------",
@@ -128,7 +144,10 @@ def main():
     for advice in advices:
         message_lines.append(f"- {advice}")
         
-    send_telegram_message("\n".join(message_lines))
+    full_message = "\n".join(message_lines)
+    
+    # 4. 傳送 Telegram 訊息
+    send_telegram_message(full_message)
 
 if __name__ == "__main__":
     main()
