@@ -47,23 +47,31 @@ def get_open_meteo_weather(lat, lon):
         sys.exit(1)
 
 def get_aqi_data(location):
-    """取得環境部 AQI 資料 (使用開放 JSON 網址，免 API Key)"""
+    """取得環境部 AQI 資料 (使用開放 JSON 網址，加入 Headers 避免被擋)"""
     url = "https://data.moenv.gov.tw/api/v2/aqx_p_432?format=json"
     
+    # 加上 User-Agent 模擬一般瀏覽器發送請求
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
+        
         records = response.json().get("records", [])
         matched_aqi = []
         
         for rec in records:
             if location in rec.get("county", "") or location in rec.get("sitename", ""):
-                if rec.get("aqi", "").isdigit():
-                    matched_aqi.append(int(rec.get("aqi")))
+                aqi_val = rec.get("aqi", "")
+                if aqi_val and aqi_val.isdigit():
+                    matched_aqi.append(int(aqi_val))
                     
         return max(matched_aqi) if matched_aqi else 0
     except Exception as e:
         print(f"取得 AQI 資料失敗: {e}")
+        # 若遇到政府 API 暫時連不上，設定備用預設值 0 讓程式不中斷，或是直接報錯
         sys.exit(1)
 
 def generate_advices(max_temp, max_pop, aqi):
