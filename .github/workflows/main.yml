@@ -3,6 +3,7 @@ name: Smart Commute Alert
 on:
   workflow_dispatch:
   schedule:
+    # 台灣時間平日 07:00 (相當於 UTC 時間 23:00)
     - cron: '0 23 * * 0-4'
 
 jobs:
@@ -27,4 +28,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LOCATION_NAME: "臺北市"
+          LATITUDE: "25.04"
+          LONGITUDE: "121.56"
         run: python main.py
